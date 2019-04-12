@@ -3,24 +3,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 import math
+import time
+import progressbar
 
 DBUG = False
 NUM_PERIOD = 500 #How many time period to run?  
-NUM_SEEDS = 1 #How many different seeds to run?
+NUM_SEEDS = 100 #How many different seeds to run?
 POPULATION_SIZE = 500 # How many people are in the population
 
-AVERAGE_H_PAYOFF = 100 #Assume the higher quality product has payoff of 4
+AVERAGE_H_PAYOFF = 100 #
 AVERAGE_L_PAYOFF = 75 #
 STANDARD_DEVIATION = 20 #Standard deviation for the idiosyncratic shock
 NUM_CONSUMERS_SAMPLED = [2, 6, 10, 16, 24, 50, 100, 200] #In the paper, this is N 
 ALPHA = 0.1 #Percent of the population to become "Potential switcher"
 
-# def update_payoff(is_high_quality):
-#     base_payoff = AVERAGE_L_PAYOFF
-#     if is_high_quality: 
-#         base_payoff = AVERAGE_H_PAYOFF
-#     idiosyncratic_shock = np.random.normal(loc=0.0, scale=SIGMA)
-#     return base_payoff + idiosyncratic_shock
 
 class Consumer:
     """
@@ -184,22 +180,29 @@ def compute_marketshare(consumer_population):
 Literally .... the main function...
 """
 def main(): 
-
+    print("------------- Starting Experiment --------------")
     all_marketshares = [] 
     all_times = [] 
     all_num_reviewers = [] 
 
+    widgets = [
+        ' [', progressbar.Timer(),  '] ', progressbar.Bar(), 
+        ' (', progressbar.ETA(), ') '
+    ]
+
     for num_reviewer in NUM_CONSUMERS_SAMPLED:
+        print("Running experiment with {} reviewers".format(num_reviewer))
         #Run for num_seed tries
-        for seed in range(NUM_SEEDS):
-            print("Seed {}".format(seed))
+        #bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength, widgets=widgets)
+        for seed in progressbar.progressbar(range(NUM_SEEDS), widgets=widgets):
+            #print("Seed {}".format(seed))
             np.random.seed(seed)
             consumer_population = initialize_population()
             h_marketshare = []
 
             #Run for NUM_PERIOD period
             for t in range(NUM_PERIOD):
-                print("Time period: {}/{}".format(t+1, NUM_PERIOD))
+                #print("Time period: {}/{}".format(t+1, NUM_PERIOD))
                 
                 #For each consumer, obtain new payoff
                 for consumer in consumer_population: 
@@ -209,7 +212,7 @@ def main():
                 all_marketshares.append(compute_marketshare(consumer_population))
                 all_times.append(t) 
                 all_num_reviewers.append(num_reviewer)
-                print("Market share at period {} is: {}".format(t, h_marketshare[-1]))
+                #print("Market share at period {} is: {}".format(t, h_marketshare[-1]))
 
                 if (t != 0):
                     #If not the first period, select potential switcher
@@ -222,8 +225,10 @@ def main():
                         
                         #Then determine whether to switch
                         potential_switcher.should_switch(reviewer_ids, consumer_population)
+            #bar.update(seed)
+
     # Save to csv file 
-    with open("result.csv", mode='w', newline='') as csvfile: 
+    with open("result_srs.csv", mode='w', newline='') as csvfile: 
         csv_writer = csv.writer(csvfile, delimiter=',')
 
         for i in range(len(all_marketshares)):
