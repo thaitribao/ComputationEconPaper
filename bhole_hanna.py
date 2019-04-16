@@ -17,21 +17,35 @@ AVERAGE_L_PAYOFF = 75 #
 STANDARD_DEVIATION = 20 #Standard deviation for the idiosyncratic shock
 NUM_CONSUMERS_SAMPLED = [2, 6, 10, 16, 24, 50, 100, 200] #In the paper, this is N 
 ALPHA = 0.1 #Percent of the population to become "Potential switcher"
+GAMMA = 0.5
+
 USE_ERS = False
+ENDOGENOUS_SWITCHING = False
+USE_STAR_RATINGS = False
+
 OUTPUT_FILE = "out.csv"
 
+STAR_THRESHOLD = [0, 0.7, 0.9, 1, 1.1]
+
+#######################################################
+# STAR RATING SYSTEM 
+# [0, 0.7, 0.9, 1, 1.1]
+# Threshold for ratio (actual_payoff)/(expected_payoff)
+#######################################################
 class Consumer:
     """
     Params: id: the consumer id, unique to this consumer
             product_type: what is initial product type for this consumer?
     """
-    def __init__(self, id, product_type):
+    def __init__(self, id, product_type, expected_payoff=90):
         self.id = id
         self.product_type = product_type
         self.current_payoff = 0.0 #Payoff at time t 
         self.prev_payoff = 0.0 #Payoff at time t-1
         self.payoff = [] 
         self.chosen_product = []
+        self.expected_payoff = expected_payoff
+        self.star_ratings = [] 
     
     """
     Obtain the payoff for this time period given the consumer's current product type
@@ -43,6 +57,19 @@ class Consumer:
         idiosyncratic_shock = np.random.normal(loc=0.0, scale=STANDARD_DEVIATION)
         self.payoff.append(idiosyncratic_shock+base_payoff)
         
+        #Determine star rating
+        ratio = (idiosyncratic_shock+base_payoff) / (self.expected_payoff)
+        for i in range(len(STAR_THRESHOLD)): 
+            if ratio < STAR_THRESHOLD[i]: 
+                self.star_ratings.append(i)
+                break 
+            if i == len(STAR_THRESHOLD) - 1: 
+                #We reach the end. and it's not less than 
+                self.star_ratings.append(i)
+    
+        #Update expected payoff
+        self.expected_payoff = GAMMA * (idiosyncratic_shock+base_payoff) + (1-GAMMA) * self.expected_payoff
+    
     '''
     Return a list of consumer ids, indicating which consumer to check
     '''
@@ -95,7 +122,6 @@ class Consumer:
             #Join the two lists together
             return h_reviewer_ids + l_reviewer_ids
 
-
     '''
     Determine whether this consumer should switch his/her product
     Params: sampled_ids: the ids of the sampled reviewers
@@ -107,24 +133,39 @@ class Consumer:
         high_payoff_total = 0
         num_high = 0 
         num_low = 0
-
-        for sampled_id in sampled_ids: 
-            current_consumer = consumer_population[sampled_id]
-            if(current_consumer.product_type == "HIGH"):
+        if not (USE_STAR_RATINGS):
+            for sampled_id in sampled_ids: 
+                current_consumer = consumer_population[sampled_id]
+                if(current_consumer.product_type == "HIGH"):
+                    num_high += 1
+                    high_payoff_total = high_payoff_total + current_consumer.payoff[-1]
+                else: 
+                    num_low += 1 
+                    low_payoff_total = low_payoff_total + current_consumer.payoff[-1]
+            
+            #Add his/her own review 
+            if self.product_type == "HIGH":
                 num_high += 1
-                high_payoff_total = high_payoff_total + current_consumer.payoff[-1]
+                high_payoff_total += self.payoff[-1]
+            else: 
+                num_low += 1
+                low_payoff_total += self.payoff[-1]
+        else: 
+            for sampled_id in sampled_ids: 
+                current_consumer = consumer_population[sampled_id]
+                if(current_consumer.product_type == "HIGH"):
+                    num_high += 1
+                    high_payoff_total = high_payoff_total + current_consumer.star_ratings[-1]
+                else: 
+                    num_low += 1
+                    low_payoff_total = low_payoff_total + current_consumer.star_ratings[-1]
+            if self.product_type == "HIGH": 
+                num_high += 1 
+                high_payoff_total += self.star_ratings[-1]
             else: 
                 num_low += 1 
-                low_payoff_total = low_payoff_total + current_consumer.payoff[-1]
-        
-        #Add his/her own review 
-        if self.product_type == "HIGH":
-            num_high += 1
-            high_payoff_total += self.payoff[-1]
-        else: 
-            num_low += 1
-            low_payoff_total += self.payoff[-1]
-        
+                low_payoff_total += self.star_ratings[-1]
+                
         #Check if both high and low are represented
         if (num_high == 0) or (num_low == 0): 
             if (DBUG): 
@@ -135,7 +176,10 @@ class Consumer:
         high_average = high_payoff_total / num_high
         #Determine: to switch or not to switch
         low_average = low_payoff_total / num_low
-
+        
+        if (DBUG): 
+            print("High average payoff: {}".format(high_average))
+            print("Low average payoff: {}".format(low_average))
         '''
         If the average payoff for the H reviews are higher than the L reviews, 
         pick HIGH for the next period. 
@@ -152,6 +196,18 @@ class Consumer:
                 print("Consumer {} previous product: {}. New product: {}".format(self.id, self.product_type, "LOW")) 
             self.product_type = "LOW"
 
+    '''
+    Determine whether this consumer should switch his/her product using 
+    endogenous switching rule
+    '''
+    def is_disatisfied(self):
+        if self.payoff[-1] >= self.expected_payoff:
+            return False
+        else: 
+            if random.uniform(0, 1) < (1 - (self.payoff[-1]/self.expected_payoff)):
+                return True
+            else: 
+                return False 
 """
 Create an array of P consumers. Randomize the initial product type (50/50). 
 """
@@ -239,8 +295,6 @@ def main():
 
             #Run for NUM_PERIOD period
             for t in range(NUM_PERIOD):
-                #print("Time period: {}/{}".format(t+1, NUM_PERIOD))
-                
                 #For each consumer, obtain new payoff
                 for consumer in consumer_population: 
                     consumer.update_payoff()
@@ -253,8 +307,11 @@ def main():
                 #print("Market share at period {} is: {}".format(t, h_marketshare[-1]))
 
                 if (t != 0):
-                    #If not the first period, select potential switcher
-                    potential_switchers = select_potential_switchers(consumer_population)
+                    #If not the first period, select potential switcher based on whether endogneous switching is ON or OFF
+                    if not (ENDOGENOUS_SWITCHING): 
+                        potential_switchers = select_potential_switchers(consumer_population)
+                    else: 
+                        potential_switchers = [consumer for consumer in consumer_population if consumer.is_disatisfied()]
 
                     #For each potential switcher, determine if they should switch
                     for potential_switcher in potential_switchers:
@@ -268,7 +325,6 @@ def main():
                         
                         #Then determine whether to switch
                         potential_switcher.should_switch(reviewer_ids, consumer_population)
-            #bar.update(seed)
 
     # Save to csv file 
     with open(OUTPUT_FILE, mode='w', newline='') as csvfile: 
@@ -276,8 +332,8 @@ def main():
 
         for i in range(len(all_marketshares)):
             csv_writer.writerow([all_seeds[i], all_times[i], all_num_reviewers[i], all_marketshares[i]])
-                
             
+
 #######################################################
 ## 1. Fake reviews: How much impact fake reviews have? What if 5% of reviews are fake??
 ##      Other paper has more info on this (Hanna-Bhole)
@@ -292,6 +348,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_seed", type=int, help="How many seeds to run for")
     parser.add_argument("--output", type=str, help="Output file path")
     parser.add_argument("--debug", type=bool, default=False)
+    parser.add_argument("--endogenous", type=bool , default=False, help="Whether endogenous switching is enabled")
+    parser.add_argument("--star_rating", type=bool, help="Whether to use star ratings instead of objective payoff")
 
     args = parser.parse_args()
     print(args)
@@ -306,6 +364,9 @@ if __name__ == "__main__":
     NUM_PERIOD = args.num_period
     NUM_SEEDS = args.num_seed
     OUTPUT_FILE = args.output
+    ENDOGENOUS_SWITCHING = args.endogenous
+    USE_STAR_RATINGS = args.star_rating
+
     main()
 
             
