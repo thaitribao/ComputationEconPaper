@@ -5,18 +5,20 @@ import random
 import math
 import time
 import progressbar
+import argparse
 
 DBUG = False
-NUM_PERIOD = 500 #How many time period to run?  
-NUM_SEEDS = 100 #How many different seeds to run?
-POPULATION_SIZE = 500 # How many people are in the population
+NUM_PERIOD = 100 #How many time period to run?  (default: 500)
+NUM_SEEDS = 10 #How many different seeds to run? (default: 100)
+POPULATION_SIZE = 500 # How many people are in the population (default: 500)
 
 AVERAGE_H_PAYOFF = 100 #
 AVERAGE_L_PAYOFF = 75 #
 STANDARD_DEVIATION = 20 #Standard deviation for the idiosyncratic shock
 NUM_CONSUMERS_SAMPLED = [2, 6, 10, 16, 24, 50, 100, 200] #In the paper, this is N 
 ALPHA = 0.1 #Percent of the population to become "Potential switcher"
-
+USE_ERS = False
+OUTPUT_FILE = "out.csv"
 
 class Consumer:
     """
@@ -44,7 +46,7 @@ class Consumer:
     '''
     Return a list of consumer ids, indicating which consumer to check
     '''
-    def get_reviews(self, num_consumer_sampled, sample_type): 
+    def get_reviews(self, num_consumer_sampled, sample_type, h_consumer_ids=[], l_consumer_ids=[]): 
         if sample_type == 'SRS': 
             #Sample N+1 random consumers from the market
             #The +1 is used as a back-up in case one of the value
@@ -61,8 +63,38 @@ class Consumer:
                 if sampled_ids[i] == self.id: 
                     sampled_ids[i] = temp_sampled[num_consumer_sampled]
             return sampled_ids
-        else: 
-            print("ERROR: Unsupported sample_type")
+        elif sample_type == 'ERS': 
+            h_reviewer_ids = []
+            l_reviewer_ids = []
+
+            #Make a copy so we don't actually change the input array
+            h_consumer_ids_temp = h_consumer_ids
+            l_consumer_ids_temp = l_consumer_ids
+
+            #Determine how many from each class we are sampling
+            samples_per_class = num_consumer_sampled//2
+
+            #Check if current use is in one of the list, then remove that id from the sampling pool
+            if self.id in h_consumer_ids_temp: 
+                h_consumer_ids_temp.remove(self.id)
+            if self.id in l_consumer_ids_temp: 
+                l_consumer_ids_temp.remove(self.id)
+            
+            #Randomly select N//2 people from the H consumer population
+            if(len(h_consumer_ids_temp) > samples_per_class):
+                h_reviewer_ids = random.sample(h_consumer_ids_temp, samples_per_class)
+            else:
+                h_reviewer_ids = h_consumer_ids_temp
+            
+            #Randomly select N//2 people from the L consumer population
+            if(len(l_consumer_ids_temp) > samples_per_class):
+                l_reviewer_ids = random.sample(l_consumer_ids_temp, samples_per_class)
+            else: 
+                l_reviewer_ids = l_consumer_ids_temp
+            
+            #Join the two lists together
+            return h_reviewer_ids + l_reviewer_ids
+
 
     '''
     Determine whether this consumer should switch his/her product
@@ -184,6 +216,7 @@ def main():
     all_marketshares = [] 
     all_times = [] 
     all_num_reviewers = [] 
+    all_seeds = []
 
     widgets = [
         ' [', progressbar.Timer(),  '] ', progressbar.Bar(), 
@@ -196,7 +229,11 @@ def main():
         #bar = progressbar.ProgressBar(max_value=progressbar.UnknownLength, widgets=widgets)
         for seed in progressbar.progressbar(range(NUM_SEEDS), widgets=widgets):
             #print("Seed {}".format(seed))
+            
+            #Seed both of our generators
             np.random.seed(seed)
+            random.seed(seed)
+
             consumer_population = initialize_population()
             h_marketshare = []
 
@@ -212,6 +249,7 @@ def main():
                 all_marketshares.append(compute_marketshare(consumer_population))
                 all_times.append(t) 
                 all_num_reviewers.append(num_reviewer)
+                all_seeds.append(seed)
                 #print("Market share at period {} is: {}".format(t, h_marketshare[-1]))
 
                 if (t != 0):
@@ -221,18 +259,23 @@ def main():
                     #For each potential switcher, determine if they should switch
                     for potential_switcher in potential_switchers:
                         #Get the reviews first
-                        reviewer_ids = potential_switcher.get_reviews(num_reviewer,"SRS")
+                        if USE_ERS == True: 
+                            h_consumers = [x.id for x in consumer_population if x.product_type=="HIGH"]
+                            l_consumers = [x.id for x in consumer_population if x.product_type=="LOW"]
+                            reviewer_ids = potential_switcher.get_reviews(num_reviewer, "ERS", h_consumers, l_consumers)
+                        else: 
+                            reviewer_ids = potential_switcher.get_reviews(num_reviewer,"SRS")
                         
                         #Then determine whether to switch
                         potential_switcher.should_switch(reviewer_ids, consumer_population)
             #bar.update(seed)
 
     # Save to csv file 
-    with open("result_srs.csv", mode='w', newline='') as csvfile: 
+    with open(OUTPUT_FILE, mode='w', newline='') as csvfile: 
         csv_writer = csv.writer(csvfile, delimiter=',')
 
         for i in range(len(all_marketshares)):
-            csv_writer.writerow([all_times[i], all_num_reviewers[i], all_marketshares[i]])
+            csv_writer.writerow([all_seeds[i], all_times[i], all_num_reviewers[i], all_marketshares[i]])
                 
             
 #######################################################
@@ -243,6 +286,26 @@ def main():
 #######################################################
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--type", type=str, help="Either ERS or SRS")
+    parser.add_argument("--num_period", type=int, help="How many time period to run for")
+    parser.add_argument("--num_seed", type=int, help="How many seeds to run for")
+    parser.add_argument("--output", type=str, help="Output file path")
+    parser.add_argument("--debug", type=bool, default=False)
+
+    args = parser.parse_args()
+    print(args)
+
+    if args.type == "ERS": 
+        USE_ERS = True
+    elif args.type == "SRS": 
+        USE_ERS = False 
+    else: 
+        print("Illegal type. Either ERS or SRS")
+
+    NUM_PERIOD = args.num_period
+    NUM_SEEDS = args.num_seed
+    OUTPUT_FILE = args.output
     main()
 
             
